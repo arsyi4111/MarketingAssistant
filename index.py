@@ -3,31 +3,39 @@ import requests
 from requests_toolbelt.multipart.encoder import MultipartEncoder
 import os
 from dotenv import load_dotenv
+import math
 
 load_dotenv()  # Load environment variables from a .env file
 
 app = Flask(__name__)
 
-COMMANDS = {
-    'TEXT': 'Simple text message',
-    'IMAGE': 'Send image',
-    'DOCUMENT': 'Send document',
-    'VIDEO': 'Send video',
-    'CONTACT': 'Send contact',
-    'PRODUCT': 'Send product',
-    'GROUP_CREATE': 'Create group',
-    'GROUP_TEXT': 'Simple text message for the group',
-    'GROUPS_IDS': "Get the id's of your three groups"
-}
+# Sample 'data_pengguna' DataFrame (replace with your actual database or data source)
+data_pengguna = [
+    {'no_hp': '1234567890', 'nama': 'John Doe', 'bersih': 5000000, 'called': False, 'acc': False},
+    {'no_hp': '0987654321', 'nama': 'Jane Smith', 'bersih': 7000000, 'called': False, 'acc': False}
+]
 
-FILES = {
-    'IMAGE': './files/file_example_JPG_100kB.jpg',
-    'DOCUMENT': './files/file-example_PDF_500_kB.pdf',
-    'VIDEO': './files/file_example_MP4_480_1_5MG.mp4',
-    'VCARD': './files/sample-vcard.txt'
-}
+# Function to calculate the minimum number of months based on salary and amount
+def calculate_min_months(amount, salary):
+    annual_interest_rate = 0.10  # Example annual interest rate (10%)
+    monthly_interest_rate = annual_interest_rate / 12
+    
+    max_affordable_payment = salary * 0.40
+    n = math.log(max_affordable_payment / (max_affordable_payment - (monthly_interest_rate * amount))) / math.log(1 + monthly_interest_rate)
+    min_months = math.ceil(n)
+    return min_months
 
+# Function to calculate the monthly payment based on amount and months
+def calculate_monthly_payment(amount, months):
+    annual_interest_rate = 0.10  # Example annual interest rate (10%)
+    monthly_interest_rate = annual_interest_rate / 12
+    
+    numerator = monthly_interest_rate * amount * (1 + monthly_interest_rate)**months
+    denominator = (1 + monthly_interest_rate)**months - 1
+    monthly_payment = numerator / denominator
+    return monthly_payment
 
+# Function to send WhatsApp messages using whapi
 def send_whapi_request(endpoint, params=None, method='POST'):
     headers = {
         'Authorization': f"Bearer {os.getenv('TOKEN')}"
@@ -50,6 +58,7 @@ def send_whapi_request(endpoint, params=None, method='POST'):
     print('Whapi response:', response.json())
     return response.json()
 
+# Set webhook to start receiving messages
 def set_hook():
     if os.getenv('BOT_URL'):
         settings = {
@@ -70,64 +79,45 @@ def set_hook():
 def handle_new_messages():
     try:
         messages = request.json.get('messages', [])
-        endpoint = None
         for message in messages:
             if message.get('from_me'):
                 continue
-            sender = {'to': message.get('chat_id')}
-            command_input = message.get('text', {}).get('body', '').strip()
-            command = list(COMMANDS.keys())[int(command_input) - 1] if command_input.isdigit() else None
+            chat_id = message.get('chat_id')
+            text = message.get('text', {}).get('body', '').strip()
 
-            if command == 'TEXT':
-                sender['body'] = 'Simple text message'
-                endpoint = 'messages/text'
-            elif command == 'IMAGE':
-                sender['caption'] = 'Text under the photo.'
-                sender['media'] = FILES['IMAGE'] + ';image/jpeg'
-                endpoint = 'messages/image'
-            elif command == 'DOCUMENT':
-                sender['caption'] = 'Text under the document.'
-                sender['media'] = FILES['DOCUMENT'] + ';application/pdf'
-                endpoint = 'messages/document'
-            elif command == 'VIDEO':
-                sender['caption'] = 'Text under the video.'
-                sender['media'] = FILES['VIDEO'] + ';video/mp4'
-                endpoint = 'messages/video'
-            elif command == 'CONTACT':
-                sender['name'] = 'Whapi Test'
-                with open(FILES['VCARD'], 'r') as vcard_file:
-                    sender['vcard'] = vcard_file.read()
-                    endpoint = 'messages/contact'
-            elif command == 'PRODUCT':
-                # Example: You need to replace config.product with an actual product ID
-                product_id = os.getenv('PRODUCT_ID')  # Replace with your product ID
-                endpoint = f'business/products/{product_id}'
-            elif command == 'GROUP_CREATE':
-                # Example: You need to replace config.phone with an actual phone number
-                participants = [message.get('chat_id').split('@')[0]]  # Replace with the phone number
-                response = send_whapi_request('groups', {'subject': 'Whapi.Cloud Test', 'participants': participants})
-                sender['body'] = f"Group created. Group id: {response.get('group_id')}" if response.get('group_id') else 'Error'
-                endpoint = 'messages/text'
-            elif command == 'GROUP_TEXT':
-                sender['to'] = os.getenv('GROUP_ID')  # Replace with your group ID
-                sender['body'] = 'Simple text message for the group'
-                endpoint = 'messages/text'
-            elif command == 'GROUPS_IDS':
-                groups_response = send_whapi_request('groups', {'count': 3}, 'GET')
-                groups = groups_response.get('groups', [])
-                sender['body'] = ',\n '.join(f"{group['id']} - {group['name']}" for group in groups) if groups else 'No groups'
-                endpoint = 'messages/text'
-            else:
-                sender['body'] = "Hi. Send me a number from the list. Don't forget to change the actual data in the code!\n\n" + \
-                                 '\n'.join(f"{i + 1}. {text}" for i, text in enumerate(COMMANDS.values()))
-                endpoint = 'messages/text'
+            # Find user based on phone number
+            user = next((u for u in data_pengguna if u['no_hp'] == chat_id), None)
+            
+            if user:
+                # Mark as called when a message is received
+                user['called'] = True
+                name = user['nama']
+                salary = user['bersih']
+                
+                if text == '1':  # User wants to request a loan
+                    send_whapi_request('messages/text', {'to': chat_id, 'body': f"Hello, {name}! Based on your salary of Rp {salary:,}, we can help you with a loan. Please type the loan amount."})
+                elif text.isdigit() and int(text) > 0:  # Loan amount entered
+                    loan_amount = int(text)
+                    min_months = calculate_min_months(loan_amount, salary)
+                    send_whapi_request('messages/text', {'to': chat_id, 'body': f"The minimum duration for repayment is {min_months} months based on your salary and requested amount. Please type the number of months you want for repayment."})
+                elif text.isdigit() and int(text) >= min_months:  # Loan duration entered
+                    months = int(text)
+                    monthly_payment = calculate_monthly_payment(loan_amount, months)
+                    max_affordable_payment = salary * 0.40
+                    
+                    if monthly_payment <= max_affordable_payment:
+                        send_whapi_request('messages/text', {'to': chat_id, 'body': f"Your estimated monthly payment is: Rp {monthly_payment:,.2f}. Is this acceptable? Type 1 to accept, 2 to decline."})
+                    else:
+                        send_whapi_request('messages/text', {'to': chat_id, 'body': f"Your estimated monthly payment is: Rp {monthly_payment:,.2f}. Unfortunately, this exceeds 40% of your salary, which is Rp {max_affordable_payment:,.2f}. Would you like to reconsider?"})
+                elif text == '1':  # Accept loan
+                    user['acc'] = True
+                    send_whapi_request('messages/text', {'to': chat_id, 'body': "Thank you for accepting the loan! We will proceed with the next steps."})
+                elif text == '2':  # Decline loan
+                    send_whapi_request('messages/text', {'to': chat_id, 'body': "You have declined the loan. Thank you for your time."})
+                else:
+                    send_whapi_request('messages/text', {'to': chat_id, 'body': "Please follow the instructions. Type 1 to request a loan."})
 
-        if endpoint is None:
-            return 'Ok', 200
-        response = send_whapi_request(endpoint, sender)
-        print(f"Response from Whapi: {response}")
         return 'Ok', 200
-    
     except Exception as e:
         print(e)
         return str(e), 500
