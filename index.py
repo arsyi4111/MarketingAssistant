@@ -5,21 +5,36 @@ import os
 from dotenv import load_dotenv
 import math
 import logging
+import psycopg2
+import pandas as pd
+
 load_dotenv()  # Load environment variables from a .env file
 
 app = Flask(__name__)
 
 # Sample 'data_pengguna' DataFrame (replace with your actual database or data source)
-data_pengguna = [
-    {'no_hp': '6289506325727', 'nama': 'Muhamad Arsyi', 'bersih': 6600000, 'alamat': 'Kp. Cicaheum No.56, Cimenyan, Bandung', 'called': False, 'acc': False},
-    {'no_hp': '628129311209', 'nama': 'Dudya Dermawan', 'bersih': 7000000, 'alamat': 'Jl. Kb. Kembang no.20, Karangmekar, Kota Cimahi', 'called': False, 'acc': False},
-    {'no_hp': '6285693553207', 'nama': 'Dudya Dermawan', 'bersih': 7000000, 'alamat': 'Jl. Kb. Kembang no.20, Karangmekar, Kota Cimahi', 'called': False, 'acc': False}
-    ]
+# data_pengguna = [
+#     {'no_hp': '6289506325727', 'nama': 'Muhamad Arsyi', 'bersih': 6600000, 'alamat': 'Kp. Cicaheum No.56, Cimenyan, Bandung', 'called': False, 'acc': False},
+#     {'no_hp': '628129311209', 'nama': 'Dudya Dermawan', 'bersih': 7000000, 'alamat': 'Jl. Kb. Kembang no.20, Karangmekar, Kota Cimahi', 'called': False, 'acc': False},
+#     {'no_hp': '6285693553207', 'nama': 'Dudya Dermawan', 'bersih': 7000000, 'alamat': 'Jl. Kb. Kembang no.20, Karangmekar, Kota Cimahi', 'called': False, 'acc': False}
+#     ]
     
 
-data_karyawan = [
-    {'nama' : 'Muhamad Arsyi', 'nopend' : 14000, 'nama_kantor' : 'Kantor Pusat Jakarta'}
-]
+# data_karyawan = [
+#     {'nama' : 'Muhamad Arsyi', 'nopend' : 14000, 'nama_kantor' : 'Kantor Pusat Jakarta'}
+# ]
+
+DATABASE_URL = os.getenv('DATABASE_URL')
+conn = psycopg2.connect(DATABASE_URL, sslmode='disable')
+cur = conn.cursor()
+
+# Fetch data from the database
+cur.execute('SELECT nip, no_hp, nama_pensiunan, gaji, alamat, called, acc,  state, k.nama_kcu , la.nama FROM "user" left join "kantor_pos" on "user".kantor_pos = "kantor_pos".kode_dirian left join list_am la on "kantor_pos".kode_kcu = la.kode_dirian  left join kcu k on "kantor_pos".kode_kcu = k.kode_kcu')
+data_pengguna_records = cur.fetchall()
+data_pengguna = pd.DataFrame(data_pengguna_records, columns=['nip', 'no_hp', 'nama', 'bersih', 'alamat', 'called', 'acc', 'state', 'nama_kcu', 'nama_am'])
+
+cur.execute('SELECT ')
+print(data_pengguna)
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
@@ -28,6 +43,18 @@ logging.basicConfig(level=logging.INFO)
 user_state = {}
 loan_amounts = {}
 duration_months = {}
+
+# State mappings
+STATE_DEFAULT = 0
+STATE_WAITING_FOR_INTEREST = 1
+STATE_INTEREST_DECLINED = 2
+STATE_WAITING_FOR_LOAN_AMOUNT = 3
+STATE_WAITING_FOR_LOAN_DURATION = 4
+STATE_WAITING_FOR_CONFIRMATION = 5
+STATE_LOAN_DECLINED = 6
+STATE_WAITING_FOR_ADDRESS_FINAL_CONFIRMATION = 7
+STATE_LOAN_ACCEPTED = 8
+STATE_WAITING_FOR_NEW_ADDRESS = 9
 
 # Function to normalize phone numbers (to remove '0' and add '62' prefix if necessary)
 def normalize_phone_number(phone_number):
@@ -126,39 +153,88 @@ def set_hook():
         }
         send_whapi_request('settings', settings, 'PATCH')
 
+def update_user_state_in_db(chat_id, state, called=None, loan_amount=None, duration=None, monthly_payment=None):
+    try:
+        normalized_chat_id = normalize_phone_number(chat_id)
+        query = 'UPDATE "user" SET state = %s'
+        params = [state]
+
+        if called is not None:
+            query += ', called = %s'
+            params.append(called)
+
+        if loan_amount is not None:
+            query += ', nominal_pinjaman = %s'
+            params.append(loan_amount)
+
+        if duration is not None:
+            query += ', durasi_pinjaman = %s'
+            params.append(duration)
+
+        if monthly_payment is not None:
+            query += ', nominal_angsuran = %s'
+            params.append(monthly_payment)
+
+        query += ' WHERE no_hp = %s'
+        params.append(normalized_chat_id)
+
+        cur.execute(query, params)
+        conn.commit()
+    except Exception as e:
+        logging.error(f"Error updating user state in database: {e}")
 
 @app.route('/hook/messages', methods=['POST'])
 def handle_new_messages():
     try:
+        # Get the list of messages from the request
         messages = request.json.get('messages', [])
+        logging.info(f"Received {len(messages)} messages.")
+
         for message in messages:
             logging.info(f"Received message: {message}")
-            
+
+            # Skip if the message is from the sender itself
             if message.get('from_me'):
                 continue
-            
+
+            # Extract chat_id and ensure it exists
             chat_id = message.get('chat_id')
+
             if not chat_id:
                 logging.warning("Missing chat_id in the message")
                 continue  # Skip this message if chat_id is missing
 
-            text = message.get('text', {}).get('body', '').strip().lower()
-            if not text:
+            # Extract and normalize the text body, ensuring the 'text' structure is valid
+            text = message.get('text', {})
+            if isinstance(text, dict):
+                text_body = text.get('body', '').strip().lower()
+            else:
+                logging.error(f"Unexpected format for 'text'. Received: {text}")
+                text_body = ''
+
+            if not text_body:
                 logging.warning("Empty text body in the message")
                 continue  # Skip this message if text is empty
-
+            
             # Normalize chat_id to the '62xxxxxxxxxx' format
-            normalized_chat_id = normalize_phone_number(chat_id)
+            normalized_chat_id = str(normalize_phone_number(chat_id))
 
             # Find user based on normalized phone number
-            user = next((u for u in data_pengguna if normalize_phone_number(u['no_hp']) == normalized_chat_id), None)
-            
+            data_pengguna_dict = data_pengguna.to_dict('records')
+            print("Data Pengguna: ", data_pengguna_dict)
+            print("Normalized Chat ID:", normalized_chat_id)
+            print("normalized u nohp:" , normalize_phone_number(data_pengguna_dict[0]['no_hp']))
+            user = next((u for u in data_pengguna_dict if normalize_phone_number(u['no_hp']) == normalized_chat_id), None)
+            print("User: ", user)
+
             if user:
                 name = user['nama']
                 salary = user['bersih']
+                nama_am = user['nama_am']
+                nama_kcu = user['nama_kcu']
                 
                 # Restart interaction if user sends "halo"
-                if text == 'halo':
+                if text_body == 'halo':
                     user_state.pop(chat_id, None)
                     loan_amounts.pop(chat_id, None)
                     send_whapi_request(
@@ -169,15 +245,17 @@ def handle_new_messages():
                         }
                     )
                     user['called'] = True
-                    user_state[chat_id] = 'waiting_for_interest'  # Restart state
+                    user_state[chat_id] = STATE_WAITING_FOR_INTEREST  # Restart state
+                    print(user_state[chat_id])
+                    update_user_state_in_db(chat_id, STATE_WAITING_FOR_INTEREST, called=True)
                     continue
 
                 # Get user state (e.g., if the user has already started the loan process)
-                state = user_state.get(chat_id, None)
+                state = user_state.get(chat_id, user['state'])
                 amount = loan_amounts.get(chat_id, None)
                 
                 # Reset state if user was not interested or declined a previous offer
-                if state in ['interest_declined', 'loan_declined']:
+                if state in [STATE_INTEREST_DECLINED, STATE_LOAN_DECLINED]:
                     user_state.pop(chat_id, None)
                     loan_amounts.pop(chat_id, None)
                     send_whapi_request(
@@ -188,7 +266,8 @@ def handle_new_messages():
                         }
                     )
                     user['called'] = True
-                    user_state[chat_id] = 'waiting_for_interest'  # Restart state
+                    user_state[chat_id] = STATE_WAITING_FOR_INTEREST  # Restart state
+                    update_user_state_in_db(chat_id, STATE_WAITING_FOR_INTEREST, called=True)
                     continue
 
                 # Send initial greeting if this is the user's first interaction
@@ -201,12 +280,13 @@ def handle_new_messages():
                         }
                     )
                     user['called'] = True
-                    user_state[chat_id] = 'waiting_for_interest'  # Save state
+                    user_state[chat_id] = STATE_WAITING_FOR_INTEREST  # Save state
+                    update_user_state_in_db(chat_id, STATE_WAITING_FOR_INTEREST, called=True)
                     continue  # Stop further processing to avoid duplicate replies
                 
                 # Process user responses based on state
-                if state == 'waiting_for_interest':
-                    if text == '1':  # User wants to request a loan
+                if state == STATE_WAITING_FOR_INTEREST:
+                    if text_body == '1':  # User wants to request a loan
                         # Calculate the maximum loan amount
                         max_loan = calculate_max_loan(salary)
                         max_loan_even = round_down_even(max_loan)
@@ -218,25 +298,28 @@ def handle_new_messages():
                                 'body': f"Terima kasih atas ketertarikan anda! Berapa jumlah pinjaman yang ingin anda ajukan? (Maksimum Rp. {max_loan_even:,.2f})."
                             }
                         )
-                        user_state[chat_id] = 'waiting_for_loan_amount'  # Update state
-                    elif text == '2':  # User doesn't want a loan
+                        user_state[chat_id] = STATE_WAITING_FOR_LOAN_AMOUNT  # Update state
+                        update_user_state_in_db(chat_id, STATE_WAITING_FOR_LOAN_AMOUNT)
+                    elif text_body == '2':  # User doesn't want a loan
                         send_whapi_request('messages/text', {'to': f"{normalized_chat_id}@s.whatsapp.net", 'body': "Terima kasih! Jika Anda berubah pikiran, silakan hubungi kami."})
-                        user_state[chat_id] = 'interest_declined'  # Update state
+                        user_state[chat_id] = STATE_INTEREST_DECLINED  # Update state
+                        update_user_state_in_db(chat_id, STATE_INTEREST_DECLINED)
                     else:
                         send_whapi_request('messages/text', {'to': f"{normalized_chat_id}@s.whatsapp.net", 'body': "Silakan kirim '1' bila Anda tertarik dengan pinjaman."})
-                elif state == 'waiting_for_loan_amount':
-                    if text.isdigit() and int(text) > 0:  # Loan amount entered
-                        loan_amount = int(text)
+                elif state == STATE_WAITING_FOR_LOAN_AMOUNT:
+                    if text_body.isdigit() and int(text_body) > 0:  # Loan amount entered
+                        loan_amount = int(text_body)
                         loan_amounts[chat_id] = loan_amount
                         min_months = calculate_min_months(loan_amount, salary)
                         send_whapi_request('messages/text', {'to': f"{normalized_chat_id}@s.whatsapp.net", 'body': f"Berdasarkan jumlah yang anda inginkan sebesar Rp. {loan_amounts.get(chat_id):,.2f}, waktu pinjaman minimal adalah {min_months} Bulan. Berapa lama anda ingin mengajukan pinjaman. Kirim jumlah bulan dalam bentuk angka (maksimal 60 Bulan)."})
-                        user_state[chat_id] = 'waiting_for_loan_duration'  # Update state
+                        user_state[chat_id] = STATE_WAITING_FOR_LOAN_DURATION  # Update state
+                        update_user_state_in_db(chat_id, STATE_WAITING_FOR_LOAN_DURATION)
                     else:
                         send_whapi_request('messages/text', {'to': f"{normalized_chat_id}@s.whatsapp.net", 'body': "Jumlah pinjaman tidak valid. Silakan coba lagi."})
-                elif state == 'waiting_for_loan_duration':
-                    if text.isdigit() and int(text) > 0:  # Loan duration entered
+                elif state == STATE_WAITING_FOR_LOAN_DURATION:
+                    if text_body.isdigit() and int(text_body) > 0:  # Loan duration entered
                         loan_amount = int(loan_amounts.get(chat_id))
-                        months = int(text)
+                        months = int(text_body)
                         duration_months[chat_id] = months
                         monthly_payment = calculate_monthly_payment(loan_amount, months)
                         max_affordable_payment = salary * 0.40
@@ -245,22 +328,24 @@ def handle_new_messages():
                             send_whapi_request('messages/text', {'to': f"{normalized_chat_id}@s.whatsapp.net", 'body': f"Berdasarkan jumlah yang anda inginkan Rp. {loan_amount:,.2f} dan durasi {duration_months[chat_id]} Bulan. Estimasi pembayaran bulanan anda adalah: Rp {monthly_payment:,.2f}. Jumlah cicilan total adalah Rp. {(monthly_payment*duration_months[chat_id]):,.2f} Apakah anda ingin mengajukan pinjaman dan dikunjungi oleh tim kami untuk proses lebih lanjut? Kirim '1' jika setuju; '2' jika tidak."})
                         else:
                             send_whapi_request('messages/text', {'to': f"{normalized_chat_id}@s.whatsapp.net", 'body': f"Berdasarkan jumlah yang anda inginkan Rp. {loan_amount:,.2f} dan durasi {duration_months[chat_id]} Bulan. Estimasi pembayaran bulanan anda adalah: Rp {monthly_payment:,.2f}. Sayangnya, nilai ini tidak sesuai dengan perhitungan sistem kami. Apakah Anda ingin mempertimbangkan lagi?"})
-                        user_state[chat_id] = 'waiting_for_confirmation'  # Update state
-                elif state == 'waiting_for_confirmation':
-                    if text == '1':  # Accept loan terms, proceed to final address confirmation
+                        user_state[chat_id] = STATE_WAITING_FOR_CONFIRMATION  # Update state
+                        update_user_state_in_db(chat_id, STATE_WAITING_FOR_CONFIRMATION)
+                elif state == STATE_WAITING_FOR_CONFIRMATION:
+                    if text_body == '1':  # Accept loan terms, proceed to final address confirmation
                         send_whapi_request(
                             'messages/text',
                             {
                                 'to': f"{normalized_chat_id}@s.whatsapp.net",
                                 'body': (
-                                    f"Terima kasih atas konfirmasinya! Tim kami, Muhamad Arsyi dari Kantor Cabang Cimahi, "
+                                    f"Terima kasih atas konfirmasinya! Tim kami, {nama_am} dari {nama_kcu}, "
                                     f"akan segera mengunjungi anda pada alamat berikut:\n\n{user['alamat']}.\n\n"
                                     f"Apakah anda dapat dikunjungi di alamat tersebut? Kirim '1' jika ya, '2' untuk memperbarui alamat."
                                 )
                             }
                         )
-                        user_state[chat_id] = 'waiting_for_address_final_confirmation'  # Update state
-                    elif text == '2':  # Decline loan terms
+                        user_state[chat_id] = STATE_WAITING_FOR_ADDRESS_FINAL_CONFIRMATION  # Update state
+                        update_user_state_in_db(chat_id, STATE_WAITING_FOR_ADDRESS_FINAL_CONFIRMATION)
+                    elif text_body == '2':  # Decline loan terms
                         send_whapi_request(
                             'messages/text',
                             {
@@ -268,7 +353,8 @@ def handle_new_messages():
                                 'body': "Baik, apabila anda ingin melakukan rekalkulasi silahkan hubungi kami kembali. Terima kasih!"
                             }
                         )
-                        user_state[chat_id] = 'loan_declined'  # Update state
+                        user_state[chat_id] = STATE_LOAN_DECLINED  # Update state
+                        update_user_state_in_db(chat_id, STATE_LOAN_DECLINED)
                     else:
                         send_whapi_request(
                             'messages/text',
@@ -278,18 +364,23 @@ def handle_new_messages():
                             }
                         )
 
-                elif state == 'waiting_for_address_final_confirmation':
-                    if text == '1':  # Address confirmed
+                elif state == STATE_WAITING_FOR_ADDRESS_FINAL_CONFIRMATION:
+                    if text_body == '1':  # Address confirmed
+                        loan_amount = loan_amounts.get(chat_id)
+                        duration = duration_months.get(chat_id)
+                        monthly_payment = calculate_monthly_payment(loan_amount, duration)
+                        
                         send_whapi_request(
                             'messages/text',
                             {
                                 'to': f"{normalized_chat_id}@s.whatsapp.net",
-                                'body': f"Terima kasih atas konfirmasinya! Proses pengajuan pinjaman Anda telah selesai. Tim kami, Muhamad Arsyi, dari kantor cabang cimahi akan mengunjungi anda pada alamat:\n\n{user['alamat']}.\n\n Selamat melanjutkan hari anda!"
+                                'body': f"Terima kasih atas konfirmasinya! Proses pengajuan pinjaman Anda telah selesai. Tim kami, {nama_am} dari {nama_kcu} akan mengunjungi anda pada alamat:\n\n{user['alamat']}.\n\n Selamat melanjutkan hari anda!"
                             }
                         )
-                        user_state[chat_id] = 'loan_accepted'  # Update state
+                        user_state[chat_id] = STATE_LOAN_ACCEPTED  # Update state
                         user['acc'] = True
-                    elif text == '2':  # Address not correct
+                        update_user_state_in_db(chat_id, STATE_LOAN_ACCEPTED, loan_amount=loan_amount, duration=duration, monthly_payment=monthly_payment)
+                    elif text_body == '2':  # Address not correct
                         send_whapi_request(
                             'messages/text',
                             {
@@ -297,7 +388,8 @@ def handle_new_messages():
                                 'body': "Mohon kirimkan alamat terbaru Anda dalam format lengkap. Contoh: 'Jl. Sudirman No. 10, Jakarta'."
                             }
                         )
-                        user_state[chat_id] = 'waiting_for_new_address'  # Update state
+                        user_state[chat_id] = STATE_WAITING_FOR_NEW_ADDRESS  # Update state
+                        update_user_state_in_db(chat_id, STATE_WAITING_FOR_NEW_ADDRESS)
                     else:
                         send_whapi_request(
                             'messages/text',
@@ -307,9 +399,9 @@ def handle_new_messages():
                             }
                         )
 
-                elif state == 'waiting_for_new_address':
+                elif state == STATE_WAITING_FOR_NEW_ADDRESS:
                     # Save new address and confirm again
-                    user['alamat'] = text
+                    user['alamat'] = text_body
                     send_whapi_request(
                         'messages/text',
                         {
@@ -320,7 +412,8 @@ def handle_new_messages():
                             )
                         }
                     )
-                    user_state[chat_id] = 'waiting_for_address_final_confirmation'  # Go back to final address confirmation
+                    user_state[chat_id] = STATE_WAITING_FOR_ADDRESS_FINAL_CONFIRMATION  # Go back to final address confirmation
+                    update_user_state_in_db(chat_id, STATE_WAITING_FOR_ADDRESS_FINAL_CONFIRMATION)
 
         return 'Ok', 200
     except Exception as e:
@@ -347,8 +440,9 @@ def send_initiation_message():
                 user['called'] = True
 
                 # Update user state to 'waiting_for_interest'
-                user_state[chat_id] = 'waiting_for_interest'
+                user_state[chat_id] = STATE_WAITING_FOR_INTEREST
                 logging.info(f"User state set to 'waiting_for_interest' for {chat_id}")
+                update_user_state_in_db(chat_id, STATE_WAITING_FOR_INTEREST, called=True)
                 
         return "Initiation messages sent successfully.", 200
     except Exception as e:
