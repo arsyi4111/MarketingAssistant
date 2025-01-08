@@ -5,15 +5,15 @@ import os
 from dotenv import load_dotenv
 import math
 import logging
-
 load_dotenv()  # Load environment variables from a .env file
 
 app = Flask(__name__)
 
 # Sample 'data_pengguna' DataFrame (replace with your actual database or data source)
 data_pengguna = [
-    {'no_hp': '6289506325727', 'nama': 'Muhamad Arsyi', 'bersih': 6600000, 'called': False, 'acc': False},
-    {'no_hp': '628129311209', 'nama': 'Dudya Dermawan', 'bersih': 7000000, 'called': False, 'acc': False}
+    {'no_hp': '6289506325727', 'nama': 'Muhamad Arsyi', 'bersih': 6600000, 'alamat': 'Kp. Cicaheum No.56, Cimenyan, Bandung', 'called': False, 'acc': False},
+    {'no_hp': '628129311209', 'nama': 'Dudya Dermawan', 'bersih': 7000000, 'alamat': 'Jl. Kb. Kembang no.20, Karangmekar, Kota Cimahi', 'called': False, 'acc': False},
+    {'no_hp': '6285693553207', 'nama': 'Dudya Dermawan', 'bersih': 7000000, 'alamat': 'Jl. Kb. Kembang no.20, Karangmekar, Kota Cimahi', 'called': False, 'acc': False}
     ]
     
 
@@ -142,7 +142,7 @@ def handle_new_messages():
                 logging.warning("Missing chat_id in the message")
                 continue  # Skip this message if chat_id is missing
 
-            text = message.get('text', {}).get('body', '').strip()
+            text = message.get('text', {}).get('body', '').strip().lower()
             if not text:
                 logging.warning("Empty text body in the message")
                 continue  # Skip this message if text is empty
@@ -157,6 +157,21 @@ def handle_new_messages():
                 name = user['nama']
                 salary = user['bersih']
                 
+                # Restart interaction if user sends "halo"
+                if text == 'halo':
+                    user_state.pop(chat_id, None)
+                    loan_amounts.pop(chat_id, None)
+                    send_whapi_request(
+                        'messages/text',
+                        {
+                            'to': f"{normalized_chat_id}@s.whatsapp.net",
+                            'body': f"Hai, {name}! Terima kasih sudah menjadi pelanggan setia BSI. Anda terpilih untuk mengajukan pinjaman kredit pensiun. Apakah anda tertarik? (Kirim '1' jika ya; '2' jika tidak)."
+                        }
+                    )
+                    user['called'] = True
+                    user_state[chat_id] = 'waiting_for_interest'  # Restart state
+                    continue
+
                 # Get user state (e.g., if the user has already started the loan process)
                 state = user_state.get(chat_id, None)
                 amount = loan_amounts.get(chat_id, None)
@@ -169,7 +184,7 @@ def handle_new_messages():
                         'messages/text',
                         {
                             'to': f"{normalized_chat_id}@s.whatsapp.net",
-                            'body': f"Hai, {name}! Terima kasih sudah menjadi pelanggan setia Pos Indonesia. Anda terpilih untuk mengajukan pinjaman kredit pensiun. Apakah anda tertarik? (Kirim '1' jika ya; '2' jika tidak)."
+                            'body': f"Hai, {name}! Terima kasih sudah menjadi pelanggan setia BSI. Anda terpilih untuk mengajukan pinjaman kredit pensiun. Apakah anda tertarik? (Kirim '1' jika ya; '2' jika tidak)."
                         }
                     )
                     user['called'] = True
@@ -182,7 +197,7 @@ def handle_new_messages():
                         'messages/text',
                         {
                             'to': f"{normalized_chat_id}@s.whatsapp.net",
-                            'body': f"Hai, {name}! Terima kasih sudah menjadi pelanggan setia Pos Indonesia. Anda terpilih untuk mengajukan pinjaman kredit pensiun. Apakah anda tertarik? (Kirim '1' jika ya; '2' jika tidak)."
+                            'body': f"Hai, {name}! Terima kasih sudah menjadi pelanggan setia BSI. Anda terpilih untuk mengajukan pinjaman kredit pensiun. Apakah anda tertarik? (Kirim '1' jika ya; '2' jika tidak)."
                         }
                     )
                     user['called'] = True
@@ -200,7 +215,7 @@ def handle_new_messages():
                             'messages/text',
                             {
                                 'to': f"{normalized_chat_id}@s.whatsapp.net",
-                                'body': f"Terima kasih atas ketertarikan anda! Berapa jumlah pinjaman yang ingin anda ajukan? (Maksimum Rp. {max_loan_even})."
+                                'body': f"Terima kasih atas ketertarikan anda! Berapa jumlah pinjaman yang ingin anda ajukan? (Maksimum Rp. {max_loan_even:,.2f})."
                             }
                         )
                         user_state[chat_id] = 'waiting_for_loan_amount'  # Update state
@@ -214,7 +229,7 @@ def handle_new_messages():
                         loan_amount = int(text)
                         loan_amounts[chat_id] = loan_amount
                         min_months = calculate_min_months(loan_amount, salary)
-                        send_whapi_request('messages/text', {'to': f"{normalized_chat_id}@s.whatsapp.net", 'body': f"Berdasarkan jumlah yang anda inginkan sebesar Rp. {loan_amounts.get(chat_id)}, waktu pinjaman minimal adalah {min_months} Bulan. Berapa lama anda ingin mengajukan pinjaman (Kirim jumlah bulan dalam bentuk angka (maksimal 60 Bulan))."})
+                        send_whapi_request('messages/text', {'to': f"{normalized_chat_id}@s.whatsapp.net", 'body': f"Berdasarkan jumlah yang anda inginkan sebesar Rp. {loan_amounts.get(chat_id):,.2f}, waktu pinjaman minimal adalah {min_months} Bulan. Berapa lama anda ingin mengajukan pinjaman. Kirim jumlah bulan dalam bentuk angka (maksimal 60 Bulan)."})
                         user_state[chat_id] = 'waiting_for_loan_duration'  # Update state
                     else:
                         send_whapi_request('messages/text', {'to': f"{normalized_chat_id}@s.whatsapp.net", 'body': "Jumlah pinjaman tidak valid. Silakan coba lagi."})
@@ -227,20 +242,85 @@ def handle_new_messages():
                         max_affordable_payment = salary * 0.40
                         
                         if monthly_payment <= max_affordable_payment:
-                            send_whapi_request('messages/text', {'to': f"{normalized_chat_id}@s.whatsapp.net", 'body': f"Berdasarkan jumlah yang anda inginkan Rp. {loan_amount} dan durasi {duration_months[chat_id]} Bulan. Estimasi pembayaran bulanan anda adalah: Rp {monthly_payment:,.2f}. Apakah anda ingin mengajukan pinjaman dan dikunjungi oleh tim kami untuk proses lebih lanjut? Kirim '1' jika setuju; '2' jika tidak."})
+                            send_whapi_request('messages/text', {'to': f"{normalized_chat_id}@s.whatsapp.net", 'body': f"Berdasarkan jumlah yang anda inginkan Rp. {loan_amount:,.2f} dan durasi {duration_months[chat_id]} Bulan. Estimasi pembayaran bulanan anda adalah: Rp {monthly_payment:,.2f}. Jumlah cicilan total adalah Rp. {(monthly_payment*duration_months[chat_id]):,.2f} Apakah anda ingin mengajukan pinjaman dan dikunjungi oleh tim kami untuk proses lebih lanjut? Kirim '1' jika setuju; '2' jika tidak."})
                         else:
-                            send_whapi_request('messages/text', {'to': f"{normalized_chat_id}@s.whatsapp.net", 'body': f"Berdasarkan jumlah yang anda inginkan Rp. {loan_amount} dan durasi {duration_months[chat_id]} Bulan. Estimasi pembayaran bulanan anda adalah: Rp {monthly_payment:,.2f}. Sayangnya, nilai ini tidak sesuai dengan perhitungan sistem kami. Apakah Anda ingin mempertimbangkan lagi?"})
+                            send_whapi_request('messages/text', {'to': f"{normalized_chat_id}@s.whatsapp.net", 'body': f"Berdasarkan jumlah yang anda inginkan Rp. {loan_amount:,.2f} dan durasi {duration_months[chat_id]} Bulan. Estimasi pembayaran bulanan anda adalah: Rp {monthly_payment:,.2f}. Sayangnya, nilai ini tidak sesuai dengan perhitungan sistem kami. Apakah Anda ingin mempertimbangkan lagi?"})
                         user_state[chat_id] = 'waiting_for_confirmation'  # Update state
                 elif state == 'waiting_for_confirmation':
-                    if text == '1':  # Accept loan
-                        user['acc'] = True
-                        send_whapi_request('messages/text', {'to': f"{normalized_chat_id}@s.whatsapp.net", 'body': "Terima kasih atas konfirmasinya! Tim kami, Muhamad Arsyi dari Kantor Pusat Jakarta, akan segera menghubungi anda."})
-                        user_state[chat_id] = 'loan_accepted'  # Update state
-                    elif text == '2':  # Decline loan
-                        send_whapi_request('messages/text', {'to': f"{normalized_chat_id}@s.whatsapp.net", 'body': "Baik, apabila anda ingin melakukan rekalkulasi silahkan hubungi kami kembali. Terima kasih!"})
+                    if text == '1':  # Accept loan terms, proceed to final address confirmation
+                        send_whapi_request(
+                            'messages/text',
+                            {
+                                'to': f"{normalized_chat_id}@s.whatsapp.net",
+                                'body': (
+                                    f"Terima kasih atas konfirmasinya! Tim kami, Muhamad Arsyi dari Kantor Cabang Cimahi, "
+                                    f"akan segera mengunjungi anda pada alamat berikut:\n\n{user['alamat']}.\n\n"
+                                    f"Apakah anda dapat dikunjungi di alamat tersebut? Kirim '1' jika ya, '2' untuk memperbarui alamat."
+                                )
+                            }
+                        )
+                        user_state[chat_id] = 'waiting_for_address_final_confirmation'  # Update state
+                    elif text == '2':  # Decline loan terms
+                        send_whapi_request(
+                            'messages/text',
+                            {
+                                'to': f"{normalized_chat_id}@s.whatsapp.net",
+                                'body': "Baik, apabila anda ingin melakukan rekalkulasi silahkan hubungi kami kembali. Terima kasih!"
+                            }
+                        )
                         user_state[chat_id] = 'loan_declined'  # Update state
                     else:
-                        send_whapi_request('messages/text', {'to': f"{normalized_chat_id}@s.whatsapp.net", 'body': "Silakan kirim '1' jika Anda setuju dengan pinjaman."})
+                        send_whapi_request(
+                            'messages/text',
+                            {
+                                'to': f"{normalized_chat_id}@s.whatsapp.net",
+                                'body': "Silakan kirim '1' jika Anda setuju dengan pinjaman."
+                            }
+                        )
+
+                elif state == 'waiting_for_address_final_confirmation':
+                    if text == '1':  # Address confirmed
+                        send_whapi_request(
+                            'messages/text',
+                            {
+                                'to': f"{normalized_chat_id}@s.whatsapp.net",
+                                'body': f"Terima kasih atas konfirmasinya! Proses pengajuan pinjaman Anda telah selesai. Tim kami, Muhamad Arsyi, dari kantor cabang cimahi akan mengunjungi anda pada alamat:\n\n{user['alamat']}.\n\n Selamat melanjutkan hari anda!"
+                            }
+                        )
+                        user_state[chat_id] = 'loan_accepted'  # Update state
+                        user['acc'] = True
+                    elif text == '2':  # Address not correct
+                        send_whapi_request(
+                            'messages/text',
+                            {
+                                'to': f"{normalized_chat_id}@s.whatsapp.net",
+                                'body': "Mohon kirimkan alamat terbaru Anda dalam format lengkap. Contoh: 'Jl. Sudirman No. 10, Jakarta'."
+                            }
+                        )
+                        user_state[chat_id] = 'waiting_for_new_address'  # Update state
+                    else:
+                        send_whapi_request(
+                            'messages/text',
+                            {
+                                'to': f"{normalized_chat_id}@s.whatsapp.net",
+                                'body': "Silakan kirim '1' jika alamat ini benar atau '2' untuk mengubah alamat."
+                            }
+                        )
+
+                elif state == 'waiting_for_new_address':
+                    # Save new address and confirm again
+                    user['alamat'] = text
+                    send_whapi_request(
+                        'messages/text',
+                        {
+                            'to': f"{normalized_chat_id}@s.whatsapp.net",
+                            'body': (
+                                f"Alamat telah diperbarui menjadi:\n\n{user['alamat']}.\n\n"
+                                f"Apakah anda dapat dikunjungi di alamat tersebut? Kirim '1' jika ya, '2' jika tidak."
+                            )
+                        }
+                    )
+                    user_state[chat_id] = 'waiting_for_address_final_confirmation'  # Go back to final address confirmation
 
         return 'Ok', 200
     except Exception as e:
@@ -259,7 +339,7 @@ def send_initiation_message():
                     'messages/text',
                     {
                         'to': chat_id,
-                        'body': f"Hai, {user['nama']}! Terima kasih sudah menjadi pelanggan setia Pos Indonesia. Anda terpilih untuk mengajukan pinjaman kredit pensiun. Apakah anda tertarik? (Kirim '1' jika ya; '2' jika tidak)."
+                        'body': f"Hai, {user['nama']}! Terima kasih sudah menjadi pelanggan setia BSI. Anda terpilih untuk mengajukan pinjaman kredit pensiun. Apakah anda tertarik? (Kirim '1' jika ya; '2' jika tidak)."
                     }
                 )
                 
