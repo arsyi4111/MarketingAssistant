@@ -311,7 +311,7 @@ def handle_new_messages():
                         {
                             'to': f"{normalized_chat_id}@s.whatsapp.net",
                             'body': (
-                                f"Selamat Sejahtera.\n"
+                                f"Salam Sejahtera.\n"
                                 f"Bapak/Ibu {name}\n\n"
                                 f"Kami mengucapkan terimakasih telah menjadikan Pos Indonesia sebagai pilihan dalam melakukan pembayaran Manfaat Pensiun setiap bulan.\n\n"
                                 f"Bekerjasama dengan Bank SMBCI (d/h Bank BTPN) kami menawarkan produk Kredit Pensiun maksimal sebesar Rp. {max_loan_even:,.2f} dengan tenor kredit selama 60 bulan.\n\n"
@@ -581,7 +581,10 @@ def handle_new_messages():
 @app.route('/send_initiation', methods=['GET'])
 def send_initiation_message():
     try:
-        for user in data_pengguna:
+        # Convert data_pengguna DataFrame to a list of dictionaries
+        data_pengguna_dict = data_pengguna.to_dict('records')
+
+        for user in data_pengguna_dict:
             if not user['called']:
                 chat_id = f"{normalize_phone_number(user['no_hp'])}@s.whatsapp.net"
                 max_loan = calculate_max_loan(user['bersih'])
@@ -593,7 +596,7 @@ def send_initiation_message():
                     {
                         'to': chat_id,
                         'body': (
-                            f"Selamat Pagi.\n"
+                            f"Salam Sejahtera.\n"
                             f"Bapak/Ibu {user['nama']}\n\n"
                             f" Kami mengucapkan terimakasih telah menjadikan Pos Indonesia sebagai pilihan dalam melakukan pembayaran Manfaat Pensiun setiap bulan.\n\n"
                             f"Bekerjasama dengan Bank SMBCI (d/h Bank BTPN) kami menawarkan produk Kredit Pensiun maksimal sebesar Rp. {max_loan_even:,.2f} dengan tenor kredit selama 60 bulan.\n\n"
